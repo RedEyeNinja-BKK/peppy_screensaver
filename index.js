@@ -32,6 +32,30 @@ const DATA_DIR = '/data/INTERNAL/peppy_screensaver';  // themes (meters, spectru
 const runFlag = '/tmp/peppyrunning';   // for detection, if peppymeter always running
 const persistFile = '/tmp/peppy_persist';  // for persist countdown communication with Python
 //---
+// Architecture ids the plugin ships bin/lib/packages directories for.
+const ARCH_IDS = ['arm', 'armv7', 'armv8', 'x64'];
+
+// Resolve the Volumio architecture id (arm | armv7 | armv8 | x64).
+// resolve-arch.sh holds the logic so the shell entry points and this file agree;
+// see that script for why /etc/os-release alone is not a reliable source.
+// Returns '' when the architecture cannot be determined.
+var _volumioArch = null;
+function resolveVolumioArch() {
+  if (_volumioArch) return _volumioArch;
+  var out = '';
+  try {
+    out = execSync('bash ' + PluginPath + '/resolve-arch.sh').toString();
+  } catch (e) {
+    out = '';
+  }
+  // The script prints one id. Accept only its first token and only a known id, so
+  // unexpected output can never end up in a lib/<...> path.
+  var detected = String(out).trim().split(/\s+/)[0] || '';
+  if (ARCH_IDS.indexOf(detected) === -1) detected = '';
+  if (detected) _volumioArch = detected;  // cache successes only, so a transient failure can recover
+  return detected;
+}
+
 var PeppyPath = PluginPath + '/screensaver/peppymeter';
 var RunPeppyFile = PluginPath + '/run_peppymeter.sh';
 var PeppyConf = PeppyPath + '/config.txt';
@@ -203,10 +227,7 @@ peppyScreensaver.prototype.onStart = function() {
     if (!fs.existsSync(MPD_include)) {self.copy_MPD_include(MPD_include_tmpl, MPD_include);}
     // only if it not correct deleted on uninstall
     // x64: ALWAYS enable MPD output - it's the only source for meter data
-    var arch_cmd = 'cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d \'VOLUMIO_ARCH="\'';
-    var arch = '';
-    try { arch = execSync(arch_cmd).toString().trim(); } catch(e) {}
-    var isX64 = (arch === 'x64');
+    var isX64 = (resolveVolumioArch() === 'x64');
     // MPD output for meter: enable on x64 (always) or Pi DSD mode
     // Disable for Pi modular ALSA - uses inline meter instead
     var enableDSD = parseInt(self.config.get('alsaSelection'),10) == 1 ? true : false;
@@ -355,9 +376,7 @@ peppyScreensaver.prototype.onStart = function() {
                           // Enable mpd_peppyalsa output before starting meter - only for DSD mode or x64
                           // Modular ALSA uses inline meter and output 1 must stay disabled
                           var alsaConf = parseInt(self.config.get('alsaSelection'),10);
-                          var arch = '';
-                          try { arch = execSync('cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d \'VOLUMIO_ARCH="\'').toString().trim(); } catch(e) {}
-                          if ((alsaConf == 1 || arch === 'x64') && state.service === 'mpd') {
+                          if ((alsaConf == 1 || resolveVolumioArch() === 'x64') && state.service === 'mpd') {
                               exec('mpc enable 1 2>/dev/null', function(err) {});
                           }
                           var child = exec( RunPeppyFile, { uid: 1000, gid: 1000 }, function (error, stdout, stderr) {
@@ -4291,9 +4310,7 @@ peppyScreensaver.prototype.install_dummy = function () {
   let defer = libQ.defer();
   
   // Detect architecture
-  var arch = '';
-  try { arch = execSync('cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d \'VOLUMIO_ARCH="\'').toString().trim(); } catch(e) {}
-  var isX64 = (arch === 'x64');
+  var isX64 = (resolveVolumioArch() === 'x64');
   
   try {
     execSync("/usr/bin/sudo /sbin/modprobe snd-dummy index=7 pcm_substreams=1 fake_buffer=0", { uid: 1000, gid: 1000 });
@@ -4363,10 +4380,7 @@ peppyScreensaver.prototype.switch_alsaConfig = function (alsaConf) {
     const self = this;
     var defer = libQ.defer();
     // x64: ALWAYS enable MPD output - it's the only source for meter data
-    var arch_cmd = 'cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d \'VOLUMIO_ARCH="\'';
-    var arch = '';
-    try { arch = execSync(arch_cmd).toString().trim(); } catch(e) {}
-    var isX64 = (arch === 'x64');
+    var isX64 = (resolveVolumioArch() === 'x64');
     // MPD output for meter: enable on x64 (always) or Pi DSD mode
     // Disable for Pi modular ALSA - uses inline meter instead
     var enableDSD = alsaConf == 1 ? true : false;
@@ -4519,8 +4533,12 @@ peppyScreensaver.prototype.get_SDL2_enabled = function (data) {
     var defer = libQ.defer();
   
     // Get architecture and set PYTHONPATH for plugin-local packages
-    var arch_cmd = 'cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d \'VOLUMIO_ARCH="\'';
-    var arch = execSync(arch_cmd).toString().trim();
+    var arch = resolveVolumioArch();
+    if (!arch) {
+        self.logger.warn(id + 'pygame/SDL2 check skipped: Volumio architecture could not be resolved');
+        defer.resolve(false);
+        return defer.promise;
+    }
     var pythonpath = '/data/plugins/user_interface/peppy_screensaver/lib/' + arch + '/python';
     var python_str = 'PYTHONPATH=' + pythonpath + ' python3 -c "import pygame; print(pygame.version.ver)"';
 
@@ -4745,10 +4763,7 @@ peppyScreensaver.prototype.writeAsoundConfigModular = function (alsaConf) {
   var self = this;
   
   // Detect architecture and select appropriate template
-  var arch_cmd = 'cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d \'VOLUMIO_ARCH="\'';
-  var arch = '';
-  try { arch = execSync(arch_cmd).toString().trim(); } catch(e) {}
-  var isX64 = (arch === 'x64');
+  var isX64 = (resolveVolumioArch() === 'x64');
   
   // Use x64-specific template on x64 systems, but keep output filename same
   var tmplFile = isX64 ? '/Peppyalsa.postPeppyalsa.5.x64.conf' : asound;

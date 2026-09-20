@@ -1,8 +1,14 @@
 #!/bin/bash
 echo "Installing PeppyMeter Screensaver plugin"
 
-# Get Volumio architecture - direct match to bin/lib/packages folders
-ARCH=$(cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d 'VOLUMIO_ARCH="')
+# Plugin location - used below and by resolve-arch.sh
+PLUGIN_DIR="/data/plugins/user_interface/peppy_screensaver"
+
+# Resolve the Volumio architecture id (arm | armv7 | armv8 | x64) - direct match
+# to the bin/lib/packages folders. resolve-arch.sh holds the logic, shared with
+# run_peppymeter.sh and index.js; see that script for why /etc/os-release alone is
+# not a reliable source.
+ARCH=$(bash "$PLUGIN_DIR/resolve-arch.sh" 2>/dev/null)
 VARIANT=$(cat /etc/os-release | grep ^VOLUMIO_VARIANT | tr -d 'VOLUMIO_VARIANT="')
 HARDWARE=$(cat /etc/os-release | grep ^VOLUMIO_HARDWARE | tr -d 'VOLUMIO_HARDWARE="')
 RENDER_MARKER="/etc/peppy_screensaver_render_group_added"
@@ -17,11 +23,14 @@ if [ -z "$ARCH" ]; then
   exit 1
 fi
 
+if ! grep -q '^VOLUMIO_ARCH=' /etc/os-release 2>/dev/null; then
+  echo "WARNING: VOLUMIO_ARCH not resolved from /etc/os-release; using '$ARCH'"
+fi
+
 echo "Detected architecture: $ARCH"
 echo "Detected variant: ${VARIANT:-unknown}"
 echo "Detected hardware: ${HARDWARE:-unknown}"
 
-PLUGIN_DIR="/data/plugins/user_interface/peppy_screensaver"
 DATA_DIR="/data/INTERNAL/peppy_screensaver"
 BIN_SOURCE="$PLUGIN_DIR/bin/$ARCH"
 LIB_SOURCE="$PLUGIN_DIR/lib/$ARCH"

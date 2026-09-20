@@ -12,12 +12,18 @@ if [ -f "$PLUGIN_DIR/package.json" ]; then
   export PEPPY_PLUGIN_VERSION
 fi
 
-# Get Volumio architecture
-ARCH=$(cat /etc/os-release | grep ^VOLUMIO_ARCH | tr -d 'VOLUMIO_ARCH="')
+# Resolve the Volumio architecture id (arm | armv7 | armv8 | x64).
+# resolve-arch.sh holds the logic, shared with install.sh and index.js - see that
+# script for why /etc/os-release alone is not a reliable source.
+ARCH=$(bash "$PLUGIN_DIR/resolve-arch.sh" 2>/dev/null)
 
 if [ -z "$ARCH" ]; then
   echo "ERROR: Could not detect Volumio architecture"
   exit 1
+fi
+
+if ! grep -q '^VOLUMIO_ARCH=' /etc/os-release 2>/dev/null; then
+  log "WARNING: VOLUMIO_ARCH not resolved from /etc/os-release; using '$ARCH'"
 fi
 
 # Set library paths for plugin-local dependencies
