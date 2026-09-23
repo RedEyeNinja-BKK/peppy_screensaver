@@ -4073,11 +4073,39 @@ def init_display(pm, meter_config_volumio, screen_w, screen_h, hide=False):
 # =============================================================================
 # Stop Watcher Thread
 # =============================================================================
+_external_stop = False
+
+
+def should_mark_user_dismiss(dismiss_path, external_stop, runflag_exists):
+    """True only for a real finger/click while the screensaver launcher asked for the marker."""
+    if external_stop or not runflag_exists:
+        return False
+    return bool(dismiss_path)
+
+
+def mark_user_dismiss():
+    """Write PEPPY_USER_DISMISS_FILE so the plugin re-arms the timeout.
+
+    Remote launchers leave the env unset. stop_watcher sets _external_stop
+    before its synthetic MOUSEBUTTONUP, and a missing runFlag is a plugin stop.
+    """
+    path = os.environ.get('PEPPY_USER_DISMISS_FILE')
+    if not should_mark_user_dismiss(path, _external_stop, os.path.exists(PeppyRunning)):
+        return
+    try:
+        with open(path, 'w') as handle:
+            handle.write('1')
+    except OSError:
+        pass
+
+
 def stop_watcher():
     """Watch for PeppyRunning file deletion to trigger stop."""
+    global _external_stop
     while os.path.exists(PeppyRunning):
         time.sleep(1)
-    # File deleted - send quit event
+    # Flag before the synthetic button-up so that event is not a user dismiss.
+    _external_stop = True
     pg.event.post(pg.event.Event(pg.MOUSEBUTTONUP))
 
 
@@ -4844,6 +4872,7 @@ def start_display_output(pm, callback, meter_config_volumio, volumio_host='local
                         running = False
                     elif event.type in exit_events:
                         if cfg.get(EXIT_ON_TOUCH, False) or cfg.get(STOP_DISPLAY_ON_TOUCH, False):
+                            mark_user_dismiss()
                             running = False
                 clock.tick(MAIN_LOOP_FRAME_RATE)
                 continue
@@ -4942,6 +4971,7 @@ def start_display_output(pm, callback, meter_config_volumio, volumio_host='local
                         running = False
                     elif event.type in exit_events:
                         if cfg.get(EXIT_ON_TOUCH, False) or cfg.get(STOP_DISPLAY_ON_TOUCH, False):
+                            mark_user_dismiss()
                             running = False
                 
                 clock.tick(MAIN_LOOP_FRAME_RATE)
@@ -4990,6 +5020,7 @@ def start_display_output(pm, callback, meter_config_volumio, volumio_host='local
                     running = False
             elif event.type in exit_events:
                 if cfg.get(EXIT_ON_TOUCH, False) or cfg.get(STOP_DISPLAY_ON_TOUCH, False):
+                    mark_user_dismiss()
                     running = False
         
         # Broadcast level data to remote clients (if server mode enabled)

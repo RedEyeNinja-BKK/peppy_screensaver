@@ -31,6 +31,16 @@ const PluginPath = '/data/plugins/user_interface/peppy_screensaver';
 const DATA_DIR = '/data/INTERNAL/peppy_screensaver';  // themes (meters, spectrum, cassette, turntable, etc.)
 const runFlag = '/tmp/peppyrunning';   // for detection, if peppymeter always running
 const persistFile = '/tmp/peppy_persist';  // for persist countdown communication with Python
+const dismissFile = '/tmp/peppy_user_dismiss';  // real finger/click; launcher exports this path
+
+// User dismiss re-arms the full screensaver timeout.
+// A clean exit without the marker (settings reload) restarts now.
+// A non-zero exit restarts now. An unarmed interval does neither.
+function meterExitAction(cleanExit, timeoutArmed, dismissMarkerPresent) {
+    if (!timeoutArmed) return 'idle';
+    if (cleanExit && dismissMarkerPresent) return 'rearm';
+    return 'restart';
+}
 //---
 var PeppyPath = PluginPath + '/screensaver/peppymeter';
 var RunPeppyFile = PluginPath + '/run_peppymeter.sh';
@@ -172,6 +182,7 @@ peppyScreensaver.prototype.onStart = function() {
 
     // remove old flag
     if (fs.existsSync(runFlag)){fs.removeSync(runFlag);}
+    try { if (fs.existsSync(dismissFile)) fs.removeSync(dismissFile); } catch (e) {}
 
     // get peppyMeter config and new baseFolder
     if (fs.existsSync(PeppyConf)){
@@ -366,9 +377,19 @@ peppyScreensaver.prototype.onStart = function() {
                             } else {
                                 self.logger.info(id + 'Start PeppyMeter');
                             }
+                            var dismissMarkerPresent = false;
+                            try { dismissMarkerPresent = fs.existsSync(dismissFile); } catch (e) {}
+                            var action = meterExitAction(error === null, !!self.Timeout, dismissMarkerPresent);
+                            try { if (dismissMarkerPresent) fs.removeSync(dismissFile); } catch (e) {}
                             if (self.meterChild === child) {
                                 self.meterChild = null;
-                                if (self.Timeout) {
+                                if (action === 'rearm') {
+                                    clearInterval(self.Timeout);
+                                    self.Timeout = setInterval(function () {
+                                        startMeterOnce();
+                                    }, ScreenTimeout);
+                                    self.logger.info(id + 'User dismiss — re-arm ' + (ScreenTimeout / 1000) + 's');
+                                } else if (action === 'restart') {
                                     startMeterOnce();
                                 }
                             }
@@ -653,6 +674,7 @@ peppyScreensaver.prototype.onStop = function() {
         
         // remove old flag
         if (fs.existsSync(runFlag)){fs.removeSync(runFlag);}
+        try { if (fs.existsSync(dismissFile)) fs.removeSync(dismissFile); } catch (e) {}
         
         // Unregister REST endpoint
         self.commandRouter.removePluginRestEndpoint({
