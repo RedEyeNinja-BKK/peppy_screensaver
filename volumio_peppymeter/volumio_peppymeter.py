@@ -4728,14 +4728,18 @@ def start_display_output(pm, callback, meter_config_volumio, volumio_host='local
             r, b = bd["type"]
             screen.blit(b, r.topleft)
         
-        # Check local icons first
+        # Check local icons first. Stock YouTube.svg is not named youtube.svg.
+        from volumio_typeformat import existing_icon_file, fit_icon_size
         local_icons = {'tidal', 'cd', 'qobuz', 'dab', 'fm', 'radio'}
+        icon_path = None
         if fmt in local_icons:
-            icon_path = os.path.join(file_path, 'format-icons', f"{fmt}.svg")
-        else:
-            icon_path = f"/volumio/http/www3/app/assets-common/format-icons/{fmt}.svg"
+            icon_path = existing_icon_file(os.path.join(file_path, 'format-icons'), fmt + '.svg')
+        if not icon_path:
+            icon_path = existing_icon_file(
+                '/volumio/http/www3/app/assets-common/format-icons', fmt + '.svg'
+            )
         
-        if not os.path.exists(icon_path):
+        if not icon_path or not os.path.exists(icon_path):
             # Render text fallback
             if overlay_state.get("sample_font"):
                 txt_surf = overlay_state["sample_font"].render(fmt[:4], True, type_color)
@@ -4756,6 +4760,12 @@ def start_display_output(pm, callback, meter_config_volumio, volumio_host='local
                 pil_img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
                 img = pg.image.fromstring(pil_img.tobytes(), pil_img.size, "RGBA")
                 img = img.convert_alpha()
+                fitted = fit_icon_size(img.get_width(), img.get_height(), type_rect.width, type_rect.height)
+                if fitted and fitted != (img.get_width(), img.get_height()):
+                    try:
+                        img = pg.transform.smoothscale(img, fitted)
+                    except Exception:
+                        img = pg.transform.scale(img, fitted)
             elif pg.version.ver.startswith("2"):
                 # Fallback: Pygame 2 native SVG (platform-dependent size)
                 img = pg.image.load(icon_path)
