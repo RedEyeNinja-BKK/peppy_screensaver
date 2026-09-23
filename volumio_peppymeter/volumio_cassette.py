@@ -2397,6 +2397,11 @@ class CassetteHandler:
                     
                     if DEBUG_LEVEL_CURRENT == "trace" and DEBUG_TRACE.get("time", False):
                         log_debug(f"[Time] OUTPUT: rendered '{time_str}' at {self.time_pos}, color={t_color}", "trace", "time")
+            elif self.last_time_str:
+                self.last_time_str = ""
+                if self.bgr_surface and self.time_rect:
+                    self.screen.blit(self.bgr_surface, self.time_rect.topleft, self.time_rect)
+                    dirty_rects.append(self.time_rect.copy())
 
         # LAYER 7b: Elapsed time (when time.elapsed.pos set, anti-collision: force redraw when reels overlap)
         if self.time_elapsed_pos and self.font_time_elapsed:
@@ -2495,6 +2500,12 @@ class CassetteHandler:
             if not sample_text:
                 sample_text = bitrate.strip() if bitrate else ""
             
+            if not sample_text:
+                if self.last_sample_text:
+                    self.last_sample_text = ""
+                    if self.bgr_surface and self.sample_rect:
+                        self.screen.blit(self.bgr_surface, self.sample_rect.topleft, self.sample_rect)
+                        dirty_rects.append(self.sample_rect.copy())
             needs_redraw = sample_text and (sample_text != self.last_sample_text or force_flag)
             
             if needs_redraw:

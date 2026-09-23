@@ -631,6 +631,26 @@ def detect_skin_type(mc_vol):
 # =============================================================================
 # MetadataWatcher - Socket.io listener for pushState events
 # =============================================================================
+def seconds_remaining(duration, seek_ms):
+    """Seconds left in a file, or -1 when the source has no duration.
+
+    A NAS file and a following webradio stream can share service 'mpd'.
+    Duration is the signal, not the service string. No duration must not
+    keep the previous file's countdown.
+    """
+    try:
+        duration_num = float(duration or 0)
+    except (TypeError, ValueError):
+        duration_num = 0.0
+    if duration_num <= 0:
+        return -1
+    try:
+        seek_num = int(float(seek_ms or 0))
+    except (TypeError, ValueError):
+        seek_num = 0
+    return max(0, int(duration_num - (seek_num // 1000)))
+
+
 class MetadataWatcher:
     """
     Watches Volumio pushState events via socket.io.
@@ -854,19 +874,20 @@ class MetadataWatcher:
                 self.metadata["_seek_raw"] = seek  # Original value, never modified by render loop
                 self.metadata["_seek_update"] = time.time()  # Track when seek was received
                 # Always update time remaining from actual seek position
-                # This ensures pause/stop shows correct frozen time
-                if duration > 0:
-                    self.time_remain_sec = max(0, duration - (seek // 1000))
-                    self.time_last_update = time.time()
-                    self.time_service = service
-                elif service != self.time_service:
-                    # Service changed to one without duration (webradio)
-                    self.time_remain_sec = -1
-                    self.time_last_update = time.time()
-                    self.time_service = service
+                # This ensures pause/stop shows correct frozen time.
+                # Duration 0 clears it even when the service string did not change.
+                self.time_remain_sec = seconds_remaining(duration, seek)
+                self.time_last_update = time.time()
+                self.time_service = service
             else:
                 seek = int(prev_seek_raw + (time.time() - prev_seek_update) * 1000)
                 self.metadata["seek"] = seek
+                # Stale seek must not rewind a file countdown, but a stream
+                # with no duration must still drop the previous file's clock.
+                if seconds_remaining(duration, seek) < 0:
+                    self.time_remain_sec = -1
+                    self.time_last_update = time.time()
+                    self.time_service = service
 
             self.metadata["_time_remain"] = self.time_remain_sec
             self.metadata["_time_update"] = self.time_last_update
