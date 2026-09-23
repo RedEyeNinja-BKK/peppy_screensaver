@@ -214,6 +214,7 @@
                               "label": "TRANSLATE.PEPPY_SCREENSAVER.APPLY",
                               "data": [
                                       "activeFolder",
+                                      "themeTagRules",
                                       "themeToRemove",
                                       "doNotDeleteThemes",
                                       "fanartEnabled",
@@ -252,6 +253,17 @@
                                     "label": "BuildIn 1280x400"
                                  }
                                ]
+                            },
+                            {
+                             "id": "themeTagRules",
+                             "element": "input",
+                             "doc": "TRANSLATE.PEPPY_SCREENSAVER.THEME_TAG_RULES_DOC",
+                             "label": "TRANSLATE.PEPPY_SCREENSAVER.THEME_TAG_RULES",
+                             "value": "",
+                             "attributes": [
+                                             {"placeholder": "Vinyl=1920x1080_name_Vinyl, Tape=1920x1080_name_Tape"},
+                                             {"maxlength": 800}
+                                           ]
                             },
                             {
                              "id": "browseThemes",

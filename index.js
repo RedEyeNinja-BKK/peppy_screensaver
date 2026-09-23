@@ -41,6 +41,54 @@ function meterExitAction(cleanExit, timeoutArmed, dismissMarkerPresent) {
     if (cleanExit && dismissMarkerPresent) return 'rearm';
     return 'restart';
 }
+
+// theme-tag-contract:start
+function lastEditionTag(text) {
+    var last = '';
+    var match;
+    var re = /\[([^\[\]]+)\]/g;
+    var source = String(text || '');
+    while ((match = re.exec(source))) {
+        last = match[1].trim();
+    }
+    return last;
+}
+
+function folderNameFromUri(uri) {
+    var path = String(uri || '').split('?')[0];
+    try { path = decodeURIComponent(path); } catch (e) {}
+    var parts = path.split('/').filter(function (part) { return part !== ''; });
+    if (parts.length < 2) return '';
+    return parts[parts.length - 2];
+}
+
+function parseThemeTagRules(text) {
+    var rules = [];
+    String(text || '').split(/\r?\n|,/).forEach(function (line) {
+        var eq = line.indexOf('=');
+        if (eq <= 0) return;
+        var tag = line.slice(0, eq).trim().toLowerCase();
+        var folder = line.slice(eq + 1).trim();
+        if (!tag || !folder) return;
+        if (folder.indexOf('/') !== -1 || folder.indexOf('..') !== -1) return;
+        rules.push({ tag: tag, folder: folder });
+    });
+    return rules;
+}
+
+// null: no rules, leave the theme alone. '': rules exist but nothing matched (use home).
+function themeFolderForEdition(album, uri, rulesText) {
+    var rules = parseThemeTagRules(rulesText);
+    if (!rules.length) return null;
+    var map = {};
+    rules.forEach(function (rule) { map[rule.tag] = rule.folder; });
+    var albumTag = lastEditionTag(album).toLowerCase();
+    if (albumTag && map[albumTag]) return map[albumTag];
+    var folderTag = lastEditionTag(folderNameFromUri(uri)).toLowerCase();
+    if (folderTag && map[folderTag]) return map[folderTag];
+    return '';
+}
+// theme-tag-contract:end
 //---
 var PeppyPath = PluginPath + '/screensaver/peppymeter';
 var RunPeppyFile = PluginPath + '/run_peppymeter.sh';
@@ -157,6 +205,9 @@ peppyScreensaver.prototype.onVolumioStart = function()
 	self.config.loadFile(configFile);
 	if (self.config.get('useSoloist') === undefined) {
 		self.config.addConfigValue('useSoloist', 'boolean', true);
+	}
+	if (self.config.get('themeTagRules') === undefined) {
+		self.config.addConfigValue('themeTagRules', 'string', '');
 	}
         
     return libQ.resolve();
@@ -350,6 +401,9 @@ peppyScreensaver.prototype.onStart = function() {
             try {
                 if (fs.existsSync(persistFile)) fs.removeSync(persistFile);
             } catch(e) {}
+            try { self.applyThemeTag(state); } catch (eTag) {
+                self.logger.warn(id + 'theme tag: ' + (eTag && eTag.message ? eTag.message : eTag));
+            }
             
             if (DSP_ON || Spotify_ON || Airplay_ON || Other_ON) {
                 // Ensure screensaver start interval exists when playing
@@ -889,6 +943,7 @@ peppyScreensaver.prototype.getUIConfig = function() {
             C('fanartTransition').value.label = self.commandRouter.getI18nString(fanartTransitionLabels[fanartTransition] || fanartTransitionLabels.none);
             C('fanartTransitionMs').value = parseInt(self.config.get('fanartTransitionMs'), 10) || 600;
             C('fanartUnlimitedImages').value = self.config.get('fanartUnlimitedImages') === true;
+            C('themeTagRules').value = self.config.get('themeTagRules') || '';
             //if (self.config.get('activeFolder') == '') {
             var meterFolder = peppy_config.current[meterFolderStr];
             if (meterFolder.includes ('_')) {
@@ -3552,12 +3607,48 @@ peppyScreensaver.prototype.buildThemeGalleryButtons = function () {
   }];
 };
 
-peppyScreensaver.prototype.applyActiveThemeFolder = function (folder) {
+peppyScreensaver.prototype.applyThemeTag = function (state) {
   var self = this;
+  if (!state) state = self._themeTagState;
+  if (!state || !peppy_config || !peppy_config.current) return;
+  self._themeTagState = { album: state.album || '', uri: state.uri || '' };
+  var rulesText = '';
+  try { rulesText = self.config.get('themeTagRules') || ''; } catch (e) { return; }
+  var picked = themeFolderForEdition(self._themeTagState.album, self._themeTagState.uri, rulesText);
+  if (picked === null) {
+    self.themeTagOverride = false;
+    return;
+  }
+  var home = self.config.get('activeFolder') || '';
+  var target = picked || home;
+  if (!target) return;
+  if (picked) {
+    var pickedPath = base_folder_P + picked;
+    var pickedOk = false;
+    try { pickedOk = fs.existsSync(pickedPath) && fs.statSync(pickedPath).isDirectory(); } catch (e) {}
+    if (!pickedOk) {
+      self.logger.info(id + 'theme tag folder missing: ' + picked);
+      target = home;
+    }
+  }
+  if (!target || target === peppy_config.current[meterFolderStr]) {
+    self.themeTagOverride = !!(picked && target === picked);
+    return;
+  }
+  var result = self.applyActiveThemeFolder(target, { keepHome: true, allowBuiltin: true });
+  if (result && result.changed) {
+    self.logger.info(id + 'theme tag -> ' + target);
+  }
+  self.themeTagOverride = !!(picked && target === picked);
+};
+
+peppyScreensaver.prototype.applyActiveThemeFolder = function (folder, opts) {
+  var self = this;
+  opts = opts || {};
 
   galleryLog(self.logger, 'basic', 'applyActiveThemeFolder called folder=' + folder);
 
-  if (!folder || folder.indexOf('/') !== -1 || folder.indexOf('..') !== -1 || folder.indexOf('_') === -1) {
+  if (!folder || folder.indexOf('/') !== -1 || folder.indexOf('..') !== -1 || (!opts.allowBuiltin && folder.indexOf('_') === -1)) {
     galleryLog(self.logger, 'verbose', 'applyActiveThemeFolder rejected invalid folder');
     return { changed: false, error: 'invalid' };
   }
@@ -3583,14 +3674,19 @@ peppyScreensaver.prototype.applyActiveThemeFolder = function (folder) {
   var partFile = folder.split('_');
   var upperc = /\b([^-])/g;
   var str_empty = fs.existsSync(folderPath + '/meters.txt') ? '' : ' (empty)';
-  var folderTitle = (partFile[1]).replace(upperc, function (c) { return c.toUpperCase(); }) + '-' + partFile[2] + ' ' + partFile[0] + str_empty;
+  var folderTitle = folder;
+  if (partFile[1]) {
+    folderTitle = (partFile[1]).replace(upperc, function (c) { return c.toUpperCase(); }) + '-' + partFile[2] + ' ' + partFile[0] + str_empty;
+  }
 
   peppy_config.current[meterFolderStr] = folder;
   if (spectrum_config) {
     spectrum_config.current[SpectrumFolderStr] = folder;
   }
-  self.config.set('activeFolder', folder);
-  self.config.set('activeFolder_title', folderTitle);
+  if (!opts.keepHome) {
+    self.config.set('activeFolder', folder);
+    self.config.set('activeFolder_title', folderTitle);
+  }
   peppy_config.current.meter = 'random';
   self.config.set('randomSelection', '');
   self.checkMetersFile();
@@ -3618,8 +3714,10 @@ peppyScreensaver.prototype.applyActiveThemeFolder = function (folder) {
     fs.removeSync(runFlag);
   }
 
-  uiNeedsUpdate = true;
-  self.updateUIConfig();
+  if (!opts.keepHome) {
+    uiNeedsUpdate = true;
+    self.updateUIConfig();
+  }
 
   galleryLog(self.logger, 'basic', 'applyActiveThemeFolder applied ' + folder + ' -> ' + folderTitle);
   return { changed: true, label: folderTitle };
@@ -3806,6 +3904,14 @@ peppyScreensaver.prototype.saveThemesArtwork = function (data) {
         fs.writeFileSync(PeppyConf, ini.stringify(peppy_config, { whitespace: true }));
       }
     }
+
+    if (data && data.themeTagRules != null) {
+      var tagRules = String(data.themeTagRules);
+      if ((self.config.get('themeTagRules') || '') !== tagRules) {
+        self.config.set('themeTagRules', tagRules);
+      }
+    }
+    try { self.applyThemeTag(self._themeTagState); } catch (eTag) {}
 
     // Bump the config version (so remote clients pick up the change) and remove the
     // run flag so the running screensaver reloads and applies the new artwork
